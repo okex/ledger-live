@@ -1,0 +1,459 @@
+import {
+  constructTypeDescByteString,
+  destructTypeFromString,
+  EIP_721_PARSERS,
+  makeTypeEntryStructBuffer,
+} from "../src/utils";
+
+describe("EIP721 Utils", () => {
+  describe("destructTypeFromString", () => {
+    test("'string[]' should return [{name: 'string', bits: undefined}, [null]]", () => {
+      expect(destructTypeFromString("string[]")).toEqual([
+        { name: "string", bits: undefined },
+        [null],
+      ]);
+    });
+
+    test("'uint8[2][][4]' should return [{name: 'uint', bits: 8}, [2, null, 4]]", () => {
+      expect(destructTypeFromString("uint8[2][][4]")).toEqual([
+        { name: "uint", bits: 8 },
+        [2, null, 4],
+      ]);
+    });
+
+    test("'bytes64' should return [{ name: 'bytes', bits: 64 }, []]", () => {
+      expect(destructTypeFromString("bytes64")).toEqual([
+        { name: "bytes", bits: 64 },
+        [],
+      ]);
+    });
+
+    test("'bool' should return [{ name: 'bool', bits: undefined }, []]", () => {
+      expect(destructTypeFromString("bool")).toEqual([
+        { name: "bool", bits: undefined },
+        [],
+      ]);
+    });
+
+    test("'bool[any]' should not throw and return ['bool', []]", () => {
+      expect(destructTypeFromString("bool[any]")).toEqual([
+        { name: "bool", bits: undefined },
+        [],
+      ]);
+    });
+
+    test("should not throw with undefined", () => {
+      expect(destructTypeFromString(undefined)).toEqual([null, []]);
+    });
+  });
+
+  describe("constructTypeDescByteString", () => {
+    const bitwiseImplem = (
+      isArray: boolean,
+      typeSize: number | null,
+      typeValue
+    ) => (Number(isArray) << 7) | (Number(typeSize !== null) << 6) | typeValue;
+
+    test("should return 1 as hex int and 01 as hexa string", () => {
+      expect(parseInt(constructTypeDescByteString(false, null, 1), 16)).toEqual(
+        1
+      );
+      expect(constructTypeDescByteString(false, null, 1)).toEqual("01");
+    });
+
+    test("should return 129 as hex int and 81 as hexa string", () => {
+      expect(parseInt(constructTypeDescByteString(true, null, 1), 16)).toEqual(
+        129
+      );
+      expect(constructTypeDescByteString(true, null, 1)).toEqual("81");
+    });
+
+    test("should return 193 as hex int and c1 as hexa string", () => {
+      expect(parseInt(constructTypeDescByteString(true, 64, 1), 16)).toEqual(
+        193
+      );
+      expect(constructTypeDescByteString(true, 64, 1)).toEqual("c1");
+    });
+
+    test("should return 207 as hex int and cf as hexa string", () => {
+      expect(parseInt(constructTypeDescByteString(true, 64, 15), 16)).toEqual(
+        207
+      );
+      expect(constructTypeDescByteString(true, 64, 15)).toEqual("cf");
+    });
+
+    test("should return 143 as hex int and 8f as hexa string", () => {
+      expect(parseInt(constructTypeDescByteString(true, null, 15), 16)).toEqual(
+        143
+      );
+      expect(constructTypeDescByteString(true, null, 15)).toEqual("8f");
+    });
+
+    test("should return 15 as hex int and ", () => {
+      expect(
+        parseInt(constructTypeDescByteString(false, null, 15), 16)
+      ).toEqual(15);
+      expect(constructTypeDescByteString(false, null, 15)).toEqual("0f");
+    });
+
+    test("should throw if typeValue >= 16", () => {
+      expect(() => constructTypeDescByteString(false, null, 16)).toThrow();
+    });
+
+    test("should return the same as the bitewise implementation", () => {
+      expect(parseInt(constructTypeDescByteString(false, null, 1), 16)).toEqual(
+        bitwiseImplem(false, null, 1)
+      );
+
+      expect(parseInt(constructTypeDescByteString(true, null, 1), 16)).toEqual(
+        bitwiseImplem(true, null, 1)
+      );
+
+      expect(parseInt(constructTypeDescByteString(true, 64, 1), 16)).toEqual(
+        bitwiseImplem(true, 64, 1)
+      );
+
+      expect(parseInt(constructTypeDescByteString(true, 64, 15), 16)).toEqual(
+        bitwiseImplem(true, 64, 15)
+      );
+
+      expect(parseInt(constructTypeDescByteString(true, null, 15), 16)).toEqual(
+        bitwiseImplem(true, null, 15)
+      );
+
+      expect(
+        parseInt(constructTypeDescByteString(false, null, 15), 16)
+      ).toEqual(bitwiseImplem(false, null, 15));
+    });
+  });
+
+  describe("makeTypeEntryStructBuffer", () => {
+    test("should return the correct buffer for entry type `int`", () => {
+      expect(
+        makeTypeEntryStructBuffer({ name: "nameForInt", type: "int" }).toString(
+          "hex"
+        )
+      ).toEqual("410a6e616d65466f72496e74");
+    });
+
+    test("should return the correct buffer for entry type `int8`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForInt",
+          type: "int8",
+        }).toString("hex")
+      ).toEqual("41010a6e616d65466f72496e74");
+    });
+
+    test("should return the correct buffer for entry type `uint`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForUint",
+          type: "uint",
+        }).toString("hex")
+      ).toEqual("420b6e616d65466f7255696e74");
+    });
+
+    test("should return the correct buffer for entry type `uint64`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForUint",
+          type: "uint64",
+        }).toString("hex")
+      ).toEqual("42080b6e616d65466f7255696e74");
+    });
+
+    test("should return the correct buffer for entry type `address`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForAddress",
+          type: "address",
+        }).toString("hex")
+      ).toEqual("030e6e616d65466f7241646472657373");
+    });
+
+    test("should return the correct buffer for entry type `bool`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForBool",
+          type: "bool",
+        }).toString("hex")
+      ).toEqual("040b6e616d65466f72426f6f6c");
+    });
+
+    test("should return the correct buffer for entry type `string`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForString",
+          type: "string",
+        }).toString("hex")
+      ).toEqual("050d6e616d65466f72537472696e67");
+    });
+
+    test("should return the correct buffer for entry type `bytes`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForBytes",
+          type: "bytes",
+        }).toString("hex")
+      ).toEqual("070c6e616d65466f724279746573");
+    });
+
+    test("should return the correct buffer for entry type `bytes32`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForBytes",
+          type: "bytes32",
+        }).toString("hex")
+      ).toEqual("46200c6e616d65466f724279746573");
+    });
+
+    test("should return the correct buffer for entry type `bytes32[4]`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForBytes",
+          type: "bytes32[4]",
+        }).toString("hex")
+      ).toEqual("c62001010c6e616d65466f724279746573");
+    });
+
+    test("should return the correct buffer for entry type `bytes32[4][]`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForBytes",
+          type: "bytes32[4][]",
+        }).toString("hex")
+      ).toEqual("c6200201000c6e616d65466f724279746573");
+    });
+    test("should return the correct buffer for entry type `bytes32[4][][256]`", () => {
+      expect(
+        makeTypeEntryStructBuffer({
+          name: "nameForBytes",
+          type: "bytes32[4][][256]",
+        }).toString("hex")
+      ).toEqual("c620030100010c6e616d65466f724279746573");
+    });
+  });
+
+  describe("EIP_721_PARSERS", () => {
+    describe("INT", () => {
+      describe("from string", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.INT("0").toString("hex")).toEqual("00");
+        });
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.INT("1").toString("hex")).toEqual("01");
+        });
+        test("should return 0a", () => {
+          expect(EIP_721_PARSERS.INT("10").toString("hex")).toEqual("0a");
+        });
+        test("should return 64", () => {
+          expect(EIP_721_PARSERS.INT("100").toString("hex")).toEqual("64");
+        });
+        test("should return 0101", () => {
+          expect(EIP_721_PARSERS.INT("257").toString("hex")).toEqual("0101");
+        });
+      });
+
+      describe("from number", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.INT(0).toString("hex")).toEqual("00");
+        });
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.INT(1).toString("hex")).toEqual("01");
+        });
+        test("should return 0a", () => {
+          expect(EIP_721_PARSERS.INT(10).toString("hex")).toEqual("0a");
+        });
+        test("should return 64", () => {
+          expect(EIP_721_PARSERS.INT(100).toString("hex")).toEqual("64");
+        });
+        test("should return 0101", () => {
+          expect(EIP_721_PARSERS.INT(257).toString("hex")).toEqual("0101");
+        });
+      });
+
+      describe("from hex", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.INT("0x00").toString("hex")).toEqual("00");
+        });
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.INT("0x01").toString("hex")).toEqual("01");
+        });
+        test("should return 0a", () => {
+          expect(EIP_721_PARSERS.INT("0x0a").toString("hex")).toEqual("0a");
+        });
+        test("should return 64", () => {
+          expect(EIP_721_PARSERS.INT("0x64").toString("hex")).toEqual("64");
+        });
+        test("should return 0101", () => {
+          expect(EIP_721_PARSERS.INT("0x0101").toString("hex")).toEqual("0101");
+        });
+      });
+    });
+
+    describe("UINT", () => {
+      describe("from string", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.UINT("0").toString("hex")).toEqual("00");
+        });
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.UINT("1").toString("hex")).toEqual("01");
+        });
+        test("should return 0a", () => {
+          expect(EIP_721_PARSERS.UINT("10").toString("hex")).toEqual("0a");
+        });
+        test("should return 64", () => {
+          expect(EIP_721_PARSERS.UINT("100").toString("hex")).toEqual("64");
+        });
+        test("should return 0101", () => {
+          expect(EIP_721_PARSERS.UINT("257").toString("hex")).toEqual("0101");
+        });
+      });
+
+      describe("from number", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.UINT(0).toString("hex")).toEqual("00");
+        });
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.UINT(1).toString("hex")).toEqual("01");
+        });
+        test("should return 0a", () => {
+          expect(EIP_721_PARSERS.UINT(10).toString("hex")).toEqual("0a");
+        });
+        test("should return 64", () => {
+          expect(EIP_721_PARSERS.UINT(100).toString("hex")).toEqual("64");
+        });
+        test("should return 0101", () => {
+          expect(EIP_721_PARSERS.UINT(257).toString("hex")).toEqual("0101");
+        });
+      });
+
+      describe("from hex", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.UINT("0x00").toString("hex")).toEqual("00");
+        });
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.UINT("0x01").toString("hex")).toEqual("01");
+        });
+        test("should return 0a", () => {
+          expect(EIP_721_PARSERS.UINT("0x0a").toString("hex")).toEqual("0a");
+        });
+        test("should return 64", () => {
+          expect(EIP_721_PARSERS.UINT("0x64").toString("hex")).toEqual("64");
+        });
+        test("should return 0101", () => {
+          expect(EIP_721_PARSERS.UINT("0x0101").toString("hex")).toEqual(
+            "0101"
+          );
+        });
+      });
+    });
+
+    describe("BOOL", () => {
+      test("should not break from null", () => {
+        expect(EIP_721_PARSERS.BOOL(null).toString("hex")).toEqual("00");
+      });
+
+      describe("from string", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.BOOL("0").toString("hex")).toEqual("00");
+        });
+
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.BOOL("0x00").toString("hex")).toEqual("00");
+        });
+
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.BOOL("1").toString("hex")).toEqual("01");
+        });
+
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.BOOL("0x01").toString("hex")).toEqual("01");
+        });
+      });
+
+      describe("from boolean", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.BOOL(false).toString("hex")).toEqual("00");
+        });
+
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.BOOL(true).toString("hex")).toEqual("01");
+        });
+      });
+
+      describe("from number", () => {
+        test("should return 00", () => {
+          expect(EIP_721_PARSERS.BOOL(0).toString("hex")).toEqual("00");
+        });
+
+        test("should return 01", () => {
+          expect(EIP_721_PARSERS.BOOL(1).toString("hex")).toEqual("01");
+        });
+      });
+    });
+
+    describe("ADDRESS", () => {
+      test("should not break from null", () => {
+        expect(EIP_721_PARSERS.ADDRESS(null).toString("hex")).toEqual("");
+      });
+
+      test("should return 183c938611642ae18790db0A1eFC21Dfe009aA1c", () => {
+        expect(
+          EIP_721_PARSERS.ADDRESS(
+            "0x183c938611642ae18790db0A1eFC21Dfe009aA1c"
+          ).toString("hex")
+        ).toEqual("183c938611642ae18790db0a1efc21dfe009aa1c");
+      });
+
+      test("should return 03d7be9a073d7ed9ac0ccb2558d7f7c6a43d3c0aa993e00f2c03424fff0a80f3", () => {
+        expect(
+          EIP_721_PARSERS.ADDRESS(
+            // Starknet address are longer, yet the address type is supposed to be 20 characters only
+            "0x03d7be9a073d7ed9ac0ccb2558d7f7c6a43d3c0aa993e00f2c03424fff0a80f3"
+          ).toString("hex")
+        ).toEqual("03d7be9a073d7ed9ac0ccb2558d7f7c6a43d3c0a");
+      });
+    });
+
+    describe("STRING", () => {
+      test("should not break from null", () => {
+        expect(EIP_721_PARSERS.STRING(null).toString("hex")).toEqual("");
+      });
+
+      test("should not break from empty string", () => {
+        expect(EIP_721_PARSERS.STRING("").toString("hex")).toEqual("");
+      });
+
+      test("should return 6b766e49734147656e697573", () => {
+        expect(EIP_721_PARSERS.STRING("kvnIsAGenius").toString("hex")).toEqual(
+          "6b766e49734147656e697573"
+        );
+      });
+    });
+
+    describe("BYTES", () => {
+      describe("from fixed size bytes", () => {
+        test("should not break from null", () => {
+          expect(EIP_721_PARSERS.BYTES(null).toString("hex")).toEqual("");
+        });
+
+        test("should return 973bb640", () => {
+          expect(
+            EIP_721_PARSERS.BYTES("0x973bb640", 4).toString("hex")
+          ).toEqual("973bb640");
+        });
+        test("should return 973bb640", () => {
+          expect(
+            EIP_721_PARSERS.BYTES(
+              "0x000000000000000000000000495f947276749ce646f68ac8c248420045cb7b5ebdf2657ffc1fadfd73cf0a8cde95d50b62d3df8c000000000000070000000032"
+            ).toString("hex")
+          ).toEqual(
+            "000000000000000000000000495f947276749ce646f68ac8c248420045cb7b5ebdf2657ffc1fadfd73cf0a8cde95d50b62d3df8c000000000000070000000032"
+          );
+        });
+      });
+    });
+  });
+});

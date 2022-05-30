@@ -17,7 +17,16 @@
 // FIXME drop:
 import type Transport from "@ledgerhq/hw-transport";
 import { BigNumber } from "bignumber.js";
-import { decodeTxInfo } from "./utils";
+import {
+  makeTypeEntryStructBuffer,
+  decodeTxInfo,
+  intAsHexBytes,
+  destructTypeFromString,
+  EIP712_TYPE_PROPERTIES,
+  hexBuffer,
+  maybeHexBuffer,
+  EIP_721_PARSERS,
+} from "./utils";
 // NB: these are temporary import for the deprecated fallback mechanism
 import { LedgerEthTransactionResolution, LoadConfig } from "./services/types";
 import ledgerService from "./services/ledger";
@@ -25,6 +34,13 @@ import {
   EthAppNftNotSupported,
   EthAppPleaseEnableContractData,
 } from "./errors";
+import {
+  EIP712Message,
+  EIP712MessageDomain,
+  EIP712MessageTypes,
+  EIP712MessageTypesEntry,
+  StructFieldData,
+} from "./types";
 
 export type StarkQuantizationType =
   | "eth"
@@ -56,17 +72,6 @@ function splitPath(path: string): number[] {
   return result;
 }
 
-function hexBuffer(str: string): Buffer {
-  return Buffer.from(str.startsWith("0x") ? str.slice(2) : str, "hex");
-}
-
-function maybeHexBuffer(
-  str: string | null | undefined
-): Buffer | null | undefined {
-  if (!str) return null;
-  return hexBuffer(str);
-}
-
 const remapTransactionRelatedErrors = (e) => {
   if (e && e.statusCode === 0x6a80) {
     return new EthAppPleaseEnableContractData(
@@ -76,6 +81,7 @@ const remapTransactionRelatedErrors = (e) => {
 
   return e;
 };
+
 /**
  * Ethereum API
  *
@@ -107,6 +113,7 @@ export default class Eth {
         "signTransaction",
         "signPersonalMessage",
         "getAppConfiguration",
+        "signEIP712Message",
         "signEIP712HashedMessage",
         "starkGetPublicKey",
         "starkSignOrder",
@@ -456,6 +463,217 @@ export default class Eth {
           s,
         };
       });
+  }
+
+  async signEIP712Message(
+    fullImplem = false,
+    jsonMessage: EIP712Message
+  ): Promise<{
+    v: number;
+    s: string;
+    r: string;
+  }> {
+    enum APDU_FIELDS {
+      CLA = 0xe0,
+      INS = 0x0c,
+      P1 = 0x00,
+      P2_v0 = 0x00,
+      P2_full = 0x01,
+    }
+    const { primaryType, types, domain, message } = jsonMessage;
+
+    const typeEntries = Object.entries(types) as [
+      keyof EIP712MessageTypes,
+      EIP712MessageTypesEntry[]
+    ][];
+    typeEntries.forEach(([typeName, typeEntries]) => {
+      this.EIP712SendStructDef("name", typeName as string);
+
+      typeEntries.forEach(({ name, type }) => {
+        const typeEntryBuffer = makeTypeEntryStructBuffer({ name, type });
+        this.EIP712SendStructDef("field", typeEntryBuffer);
+      });
+    });
+
+    const typesMap = {} as Record<string, Record<string, string>>;
+    for (const type in types) {
+      typesMap[type] = types[type]?.reduce(
+        (acc, curr) => ({ ...acc, [curr.name]: curr.type }),
+        {}
+      );
+    }
+
+    const handleField = (
+      destructedType: ReturnType<typeof destructTypeFromString>,
+      data: unknown
+    ) => {
+      const [typeDescription, arrSizes] = destructedType;
+      const [currSize, ...restSizes] = arrSizes;
+
+      if (Array.isArray(data) && typeof currSize !== "undefined") {
+        this.EIP712SendStructImplem("array", data.length);
+        data.forEach((d) => handleField([typeDescription, restSizes], d));
+      } else {
+        if (
+          !EIP712_TYPE_PROPERTIES[typeDescription?.name?.toUpperCase() || ""] // Type is Custom
+        ) {
+          Object.entries(data as EIP712Message["message"])?.forEach(
+            ([fieldName, fieldValue]: [string, unknown]) => {
+              const fieldType =
+                typesMap?.[typeDescription?.name || ""][fieldName];
+
+              if (fieldType) {
+                handleField(destructTypeFromString(fieldType), fieldValue);
+              }
+            }
+          );
+        } else {
+          this.EIP712SendStructImplem("field", {
+            data,
+            type: typeDescription?.name || "",
+            sizeInBits: typeDescription?.bits,
+          });
+        }
+      }
+    };
+
+    const domainName = "EIP712Domain";
+    this.EIP712SendStructImplem("root", domainName);
+    const domainTypeFields = types[domainName];
+    domainTypeFields?.forEach(({ name, type }) => {
+      const domainFieldValue = domain[name];
+      handleField(destructTypeFromString(type as string), domainFieldValue);
+    });
+
+    this.EIP712SendStructImplem("root", primaryType);
+    const primaryTypeFields = types[primaryType];
+    primaryTypeFields?.forEach(({ name, type }) => {
+      const primaryTypeValue = message[name];
+      handleField(destructTypeFromString(type as string), primaryTypeValue);
+    });
+
+    return this.transport
+      .send(
+        APDU_FIELDS.CLA,
+        APDU_FIELDS.INS,
+        APDU_FIELDS.P1,
+        fullImplem ? APDU_FIELDS.P2_v0 : APDU_FIELDS.P2_full,
+        Buffer.from("")
+      )
+      .then((response) => {
+        const v = response[0];
+        const r = response.slice(1, 1 + 32).toString("hex");
+        const s = response.slice(1 + 32, 1 + 32 + 32).toString("hex");
+
+        return {
+          v,
+          r,
+          s,
+        };
+      });
+  }
+
+  EIP712SendStructDef(
+    structType: "name" | "field",
+    value: string | Buffer
+  ): Promise<Buffer> {
+    enum APDU_FIELDS {
+      CLA = 0xe0,
+      INS = 0x1a,
+      P1_complete = 0x00,
+      P1_partial = 0x01,
+      P2_name = 0x00,
+      P2_field = 0xff,
+    }
+    const data =
+      structType === "name" && typeof value === "string"
+        ? Buffer.from(value, "utf-8")
+        : (value as Buffer);
+
+    return this.transport.send(
+      APDU_FIELDS.CLA,
+      APDU_FIELDS.INS,
+      APDU_FIELDS.P1_complete,
+      structType === "name" ? APDU_FIELDS.P2_name : APDU_FIELDS.P2_field,
+      data
+    );
+  }
+
+  EIP712SendStructImplem(
+    structType: "root" | "array" | "field",
+    value: string | number | StructFieldData
+  ): Promise<Buffer | void> {
+    enum APDU_FIELDS {
+      CLA = 0xe0,
+      INS = 0x1c,
+      P1_complete = 0x00,
+      P1_partial = 0x01,
+      P2_root = 0x00,
+      P2_array = 0x0f,
+      P2_field = 0xff,
+    }
+
+    if (structType === "root") {
+      return this.transport.send(
+        APDU_FIELDS.CLA,
+        APDU_FIELDS.INS,
+        APDU_FIELDS.P1_complete,
+        APDU_FIELDS.P2_root,
+        Buffer.from(value as string, "utf-8")
+      );
+    }
+
+    if (structType === "array") {
+      return this.transport.send(
+        APDU_FIELDS.CLA,
+        APDU_FIELDS.INS,
+        APDU_FIELDS.P1_complete,
+        APDU_FIELDS.P2_array,
+        Buffer.from(intAsHexBytes(value as number, 1), "hex")
+      );
+    }
+
+    if (structType === "field") {
+      const { data: rawData, type, sizeInBits } = value as StructFieldData;
+      const encodedData: Buffer | null = EIP_721_PARSERS[type.toUpperCase()]?.(
+        rawData,
+        sizeInBits
+      );
+
+      if (encodedData) {
+        // (encodedData.length & 0xff00) >> 8
+        const dataLengthPer16Bits = Math.floor(encodedData.length / 256);
+        // encodedData.length & 0xff
+        const dataLengthModulo16Bits = encodedData.length % 256;
+
+        const data = Buffer.concat([
+          Buffer.from(intAsHexBytes(dataLengthPer16Bits, 1), "hex"),
+          Buffer.from(intAsHexBytes(dataLengthModulo16Bits, 1), "hex"),
+          encodedData,
+        ]);
+
+        const bufferSlices = new Array(Math.ceil(data.length / 256))
+          .fill(null)
+          .map((_, i) => {
+            console.log(i * 255, (i + 1) * 255);
+            return data.slice(i * 255, (i + 1) * 255);
+          });
+
+        bufferSlices.forEach((buffer, i) => {
+          this.transport.send(
+            APDU_FIELDS.CLA,
+            APDU_FIELDS.INS,
+            i <= bufferSlices.length - 1
+              ? APDU_FIELDS.P1_partial
+              : APDU_FIELDS.P1_complete, // do partial if data.length > 255
+            APDU_FIELDS.P2_array,
+            buffer
+          );
+        });
+      }
+    }
+
+    return Promise.resolve();
   }
 
   /**

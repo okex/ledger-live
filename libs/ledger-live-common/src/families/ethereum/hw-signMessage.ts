@@ -1,7 +1,7 @@
 import Eth from "@ledgerhq/hw-app-eth";
 import Transport from "@ledgerhq/hw-transport";
 import { TypedDataUtils } from "eth-sig-util";
-import { bufferToHex } from "ethereumjs-util";
+// import { bufferToHex } from "ethereumjs-util";
 import type { MessageData, Result } from "../../hw/signMessage/types";
 import type { TypedMessageData, TypedMessage } from "./types";
 type EthResolver = (
@@ -36,24 +36,29 @@ const resolver: EthResolver = async (
   if (typeof message === "string") {
     result = await eth.signPersonalMessage(path, rawMessage.slice(2));
   } else {
-    result = await eth.signEIP712HashedMessage(
-      path,
-      bufferToHex(domainHash(message)),
-      bufferToHex(messageHash(message))
-    );
+    result = await eth.signEIP712Message(false, message);
   }
 
-  let v: string | number = result["v"] - 27;
-  v = v.toString(16);
+  // let v: string | number = result["v"] - 27;
+  // v = v.toString(16);
 
-  if (v.length < 2) {
-    v = "0" + v;
-  }
+  // if (v.length < 2) {
+  //   v = "0" + v;
+  // }
 
-  const signature = `0x${result["r"]}${result["s"]}${v}`;
+  // const signature = `0x${result["r"]}${result["s"]}${v}`;
+  // return {
+  //   rsv: result,
+  //   signature,
+  // };
+
   return {
-    rsv: result,
-    signature,
+    rsv: {
+      r: "string",
+      s: "string",
+      v: 0,
+    },
+    signature: "string",
   };
 };
 

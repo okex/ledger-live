@@ -1,3 +1,4 @@
+import fs from "fs";
 import { from } from "rxjs";
 import { mergeMap } from "rxjs/operators";
 import { asDerivationMode } from "@ledgerhq/live-common/lib/derivation";
@@ -24,6 +25,17 @@ export default {
       type: String,
       desc: "the message to sign",
     },
+    {
+      name: "rawMessage",
+      type: String,
+      desc: "the message to sign but raw",
+    },
+    {
+      name: "parser",
+      type: String,
+      desc: "parser used for the message. Default: String",
+      default: "String",
+    },
   ],
   job: (arg: any) =>
     inferCurrency(arg).pipe(
@@ -37,6 +49,32 @@ export default {
         }
 
         asDerivationMode(arg.derivationMode);
+
+        switch (arg.parser?.toLowerCase()) {
+          case "object":
+          case "json":
+          case "json.parse":
+            try {
+              arg.message = JSON.parse(arg.message);
+            } catch (e) {
+              //
+            }
+            break;
+
+          case "file":
+            try {
+              arg.message = JSON.parse(fs.readFileSync(arg.message, "utf8"));
+            } catch (e) {
+              //
+            }
+            break;
+
+          case "string":
+          default:
+            arg.message = arg.message?.toString();
+            break;
+        }
+
         return withDevice(arg.device || "")((t) =>
           from(signMessage(t, { ...arg, currency }))
         );
